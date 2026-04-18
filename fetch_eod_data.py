@@ -10,6 +10,7 @@ Asset list is managed in an 'Assets' tab (Ticker, Name).
 
 import os
 import json
+import time
 from datetime import datetime, timedelta
 
 import yfinance as yf
@@ -139,28 +140,35 @@ def get_existing_keys(daily_ws):
 # ---------------------------------------------------------------------------
 
 def remove_tickers(daily_ws, tickers_to_remove):
-    """Delete all rows from the Daily tab for tickers no longer in the Assets list."""
+    """Delete all rows from the Daily tab for tickers no longer in the Assets list.
+
+    Rebuilds the sheet without the removed tickers in a single batch write
+    to avoid hitting Google Sheets API rate limits.
+    """
     if not tickers_to_remove:
         return
 
     all_values = daily_ws.get_all_values()
-    # Identify row indices to delete (1-indexed, skip header)
-    rows_to_delete = []
-    for i, row in enumerate(all_values):
-        if i == 0:
-            continue  # skip header
-        if len(row) >= 2 and row[1] in tickers_to_remove:
-            rows_to_delete.append(i + 1)  # gspread uses 1-indexed rows
+    if len(all_values) <= 1:
+        return  # Only header, nothing to remove
 
-    if not rows_to_delete:
+    header = all_values[0]
+    kept_rows = [row for row in all_values[1:] if len(row) >= 2 and row[1] not in tickers_to_remove]
+    removed_count = len(all_values) - 1 - len(kept_rows)
+
+    if removed_count == 0:
         return
 
-    # Delete from bottom to top so indices don't shift
-    for row_idx in reversed(rows_to_delete):
-        daily_ws.delete_rows(row_idx)
+    # Clear the entire sheet and rewrite with kept data
+    daily_ws.clear()
+    daily_ws.update("A1", [header] + kept_rows, value_input_option="USER_ENTERED")
+
+    # Re-bold the header
+    end_col = chr(ord("A") + len(header) - 1)
+    daily_ws.format(f"A1:{end_col}1", {"textFormat": {"bold": True}})
 
     removed_str = ", ".join(sorted(tickers_to_remove))
-    print(f"  🗑 Removed {len(rows_to_delete)} rows for deleted tickers: {removed_str}")
+    print(f"  🗑 Removed {removed_count} rows for deleted tickers: {removed_str}")
 
 
 # ---------------------------------------------------------------------------
@@ -291,15 +299,7 @@ def main():
 
     print(f"New rows to append: {len(unique_rows)}")
 
-    # Append in batches (Sheets API has limits)
-    BATCH_SIZE = 500
-    for i in range(0, len(unique_rows), BATCH_SIZE):
-        batch = unique_rows[i : i + BATCH_SIZE]
-        daily_ws.append_rows(batch, value_input_option="USER_ENTERED")
-        print(f"  Appended batch {i // BATCH_SIZE + 1} ({len(batch)} rows)")
-
-    print(f"\n✓ Successfully appended {len(unique_rows)} rows to '{SPREADSHEET_NAME}'")
-
-
-if __name__ == "__main__":
-    main()
+    # Append in batches (Sheets API allows 60 write requests/min)
+    BATCH_SIZE = 1000
+    total_batches = (len(unique_rows) + BATCH_SIZE - 1) // BATCH_SIZE
+    for i in range(0, len(unique_r
