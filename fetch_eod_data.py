@@ -302,4 +302,16 @@ def main():
     # Append in batches (Sheets API allows 60 write requests/min)
     BATCH_SIZE = 1000
     total_batches = (len(unique_rows) + BATCH_SIZE - 1) // BATCH_SIZE
-    for i in range(0, len(unique_r
+    for i in range(0, len(unique_rows), BATCH_SIZE):
+        batch = unique_rows[i : i + BATCH_SIZE]
+        batch_num = i // BATCH_SIZE + 1
+        daily_ws.append_rows(batch, value_input_option="USER_ENTERED")
+        print(f"  Appended batch {batch_num}/{total_batches} ({len(batch)} rows)")
+        if batch_num < total_batches:
+            time.sleep(5)  # Pause between batches to stay within rate limits
+
+    print(f"\n✓ Successfully appended {len(unique_rows)} rows to '{SPREADSHEET_NAME}'")
+
+
+if __name__ == "__main__":
+    main()
