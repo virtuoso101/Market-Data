@@ -44,6 +44,13 @@ jobs:
           SPREADSHEET_NAME: ${{ secrets.SPREADSHEET_NAME }}
         run: python calculate_indicators.py
 
+      - name: Export asset CSVs to Google Drive
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SPREADSHEET_NAME: ${{ secrets.SPREADSHEET_NAME }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+        run: python export_csv.py
+
       # --- EOD Indices Data ---
 
       - name: Fetch EOD indices data
@@ -54,3 +61,11 @@ jobs:
           LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || '1' }}
           DEFAULT_ASSETS_JSON: '[["^GSPC","S&P 500"],["^IXIC","NASDAQ Composite"],["^FTSE","FTSE 100"],["^GDAXI","DAX"],["^N225","Nikkei 225"],["^VIX","CBOE Volatility Index"],["GBPUSD=X","GBP/USD"],["GBPEUR=X","GBP/EUR"],["GBPJPY=X","GBP/JPY"],["GC=F","Gold Futures"]]'
         run: python fetch_eod_data.py
+
+      - name: Export indices CSVs to Google Drive
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SPREADSHEET_NAME: ${{ secrets.INDICES_SPREADSHEET_NAME }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          EXPORT_TABS: "Indices,Daily"
+        run: python export_csv.py
