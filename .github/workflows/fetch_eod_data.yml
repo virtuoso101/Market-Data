@@ -29,7 +29,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Fetch EOD data and update Google Sheet
+      # --- EOD Market Data (Assets) ---
+
+      - name: Fetch EOD asset data
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SPREADSHEET_NAME: ${{ secrets.SPREADSHEET_NAME }}
@@ -41,3 +43,14 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SPREADSHEET_NAME: ${{ secrets.SPREADSHEET_NAME }}
         run: python calculate_indicators.py
+
+      # --- EOD Indices Data ---
+
+      - name: Fetch EOD indices data
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SPREADSHEET_NAME: ${{ secrets.INDICES_SPREADSHEET_NAME }}
+          ASSETS_WORKSHEET_NAME: "Indices"
+          LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || '1' }}
+          DEFAULT_ASSETS_JSON: '[["^GSPC","S&P 500"],["^IXIC","NASDAQ Composite"],["^FTSE","FTSE 100"],["^GDAXI","DAX"],["^N225","Nikkei 225"],["^VIX","CBOE Volatility Index"],["GBPUSD=X","GBP/USD"],["GBPEUR=X","GBP/EUR"],["GBPJPY=X","GBP/JPY"],["GC=F","Gold Futures"]]'
+        run: python fetch_eod_data.py
