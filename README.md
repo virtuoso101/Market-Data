@@ -1,28 +1,40 @@
 # Market Data
 
-Automated daily pipeline that fetches end-of-day stock and ETF prices from Yahoo Finance, calculates technical indicators, and writes everything to a Google Sheet. Runs on GitHub Actions — no server required.
+Automated daily pipeline that fetches end-of-day stock, ETF, and index prices from Yahoo Finance, calculates technical indicators, and writes everything to Google Sheets. Runs on GitHub Actions — no server required.
 
 ## What it does
 
-Each night at **10pm UTC**, a scheduled GitHub Actions workflow runs two scripts in sequence:
+Each night at **10pm UTC**, a scheduled GitHub Actions workflow runs three steps in sequence:
 
-1. **`fetch_eod_data.py`** — pulls the latest closing prices for every ticker in the Google Sheet's Assets tab via `yfinance`, deduplicates, and appends new rows to the Daily tab.
-2. **`calculate_indicators.py`** — reads the Daily tab, computes technical indicators across all tickers, and writes the results to two additional tabs:
-   - **Indicators** — 90 days of daily values (Candle patterns, Volume analysis, Guppy EMAs, Stochastic Momentum Index, True Range/ATR, RSI)
+1. **`fetch_eod_data.py`** (assets) — pulls the latest closing prices for every ticker in the **EOD Market Data** sheet's Assets tab via `yfinance`, deduplicates, and appends new rows to its Daily tab.
+2. **`calculate_indicators.py`** — reads the Daily tab, computes technical indicators across all asset tickers, and writes the results to two additional tabs:
+   - **Indicators** — 90 days of daily values (Candle patterns, Volume analysis, Guppy EMAs, Stochastic Momentum Index, True Range/ATR, RSI, OBV, MFI)
    - **Signals** — weekly historical signals (one row per ticker per week, 13 weeks), with plain-language signals (e.g. "RSI: Overbought", "Guppy: Bullish, Expanding")
+3. **`fetch_eod_data.py`** (indices) — pulls the latest closing prices for every ticker in the **EOD Indices Data** sheet's Indices tab and appends new rows to its Daily tab. Same script, different configuration via environment variables.
 
-## Google Sheet structure
+## Google Sheets
+
+The pipeline writes to two separate Google Sheets:
+
+### EOD Market Data
 
 | Tab | Contents | Updated |
 |-----|----------|---------|
-| **Assets** | Editable watchlist (Ticker, Name) | By you |
+| **Assets** | Equities and ETF watchlist (Ticker, Name) | By you |
 | **Daily** | Raw OHLCV data, appended daily | Every run |
 | **Indicators** | 90 days of daily indicator values per ticker | Every run (full rewrite) |
 | **Signals** | Weekly signals per ticker (13 weeks of history) | Every run (full rewrite) |
 
-## Managing the watchlist
+### EOD Indices Data
 
-Edit the **Assets** tab directly in Google Sheets. No code changes needed.
+| Tab | Contents | Updated |
+|-----|----------|---------|
+| **Indices** | Market context watchlist — indices, currencies, commodities (Ticker, Name) | By you |
+| **Daily** | Raw OHLCV data, appended daily | Every run |
+
+## Managing the watchlists
+
+Edit the **Assets** tab (in EOD Market Data) or the **Indices** tab (in EOD Indices Data) directly in Google Sheets. Both use the same two-column format (Ticker, Name). No code changes needed.
 
 - **Add a ticker**: insert a row with the Yahoo Finance symbol and a display name. The next run backfills 365 days of history automatically.
 - **Remove a ticker**: delete the row. The next run purges its historical data from the Daily tab.
@@ -53,8 +65,8 @@ See [SETUP.md](SETUP.md) for step-by-step instructions covering Google Cloud ser
 
 | File | Purpose |
 |------|---------|
-| `fetch_eod_data.py` | Fetches EOD price data from Yahoo Finance and writes to the Daily tab |
-| `calculate_indicators.py` | Computes technical indicators and writes Indicators + Signals tabs |
+| `fetch_eod_data.py` | Fetches EOD price data from Yahoo Finance and writes to a Daily tab (used for both sheets) |
+| `calculate_indicators.py` | Computes technical indicators and writes Indicators + Signals tabs (assets only) |
 | `requirements.txt` | Python dependencies |
 | `.github/workflows/fetch_eod_data.yml` | GitHub Actions workflow (daily schedule + manual trigger) |
 | `SETUP.md` | First-time setup guide |
@@ -70,7 +82,6 @@ See [SETUP.md](SETUP.md) for step-by-step instructions covering Google Cloud ser
 | **True Range / ATR** | 14-period ATR, ATR as percentage of price |
 | **RSI** | 14-period RSI |
 | **OBV** | On-Balance Volume with 20-day SMA, bullish/bearish divergence detection for accumulation/distribution |
-| **A/D Line** | Accumulation/Distribution Line with 20-day SMA, divergence detection against price |
 | **MFI** | 14-period Money Flow Index (volume-weighted RSI), MFI/RSI divergence for institutional activity |
 
 ## Using with LLMs
