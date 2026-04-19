@@ -3,7 +3,7 @@ Technical Indicator Calculator
 Reads EOD data from the 'Daily' tab of the Google Sheet, computes technical
 indicators, and writes results to two tabs:
   - 'Indicators': 90 days of daily indicator values per ticker
-  - 'Signals':    Latest snapshot with derived buy/sell signals per ticker
+  - 'Signals':    Weekly historical signals (one row per ticker per week, 13 weeks)
 
 Indicators calculated:
   - Candle patterns (body size, upper/lower wick, bullish/bearish)
@@ -261,13 +261,30 @@ def calculate_all_indicators(df):
 # Signal Generation
 # ---------------------------------------------------------------------------
 
-def generate_signals(ticker, name, df):
-    """Generate a summary signal row from the latest indicator values."""
-    if len(df) < 2:
+def generate_signals(ticker, name, df, pos=-1):
+    """Generate a summary signal row from indicator values at a given position.
+
+    Args:
+        ticker: Ticker symbol
+        name: Display name
+        df: Full DataFrame with all indicators calculated
+        pos: Integer position in the DataFrame (default -1 = latest row).
+             Negative indices work like normal Python (e.g. -1 = last row).
+    """
+    # Resolve negative index to positive
+    if pos < 0:
+        pos = len(df) + pos
+    if pos < 1 or pos >= len(df):
         return None
 
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
+    # Slice the DataFrame up to and including the target position
+    # so that relative lookbacks (e.g. -20 days) work correctly
+    df_slice = df.iloc[:pos + 1]
+    if len(df_slice) < 2:
+        return None
+
+    latest = df_slice.iloc[-1]
+    prev = df_slice.iloc[-2]
 
     # --- RSI Signal ---
     rsi = latest.get("RSI_14", None)
@@ -377,9 +394,9 @@ def generate_signals(ticker, name, df):
         candle_signal = "N/A"
 
     # --- OBV Signal (divergence detection over 20 days) ---
-    if len(df) >= 20:
-        price_20d_change = df["Close"].iloc[-1] - df["Close"].iloc[-20]
-        obv_20d_change = df["OBV"].iloc[-1] - df["OBV"].iloc[-20]
+    if len(df_slice) >= 20:
+        price_20d_change = df_slice["Close"].iloc[-1] - df_slice["Close"].iloc[-20]
+        obv_20d_change = df_slice["OBV"].iloc[-1] - df_slice["OBV"].iloc[-20]
 
         if price_20d_change <= 0 and obv_20d_change > 0:
             obv_signal = "Bullish Divergence (Accumulation)"
@@ -393,8 +410,8 @@ def generate_signals(ticker, name, df):
         obv_signal = "N/A"
 
     # --- A/D Line Signal (divergence detection over 20 days) ---
-    if len(df) >= 20:
-        ad_20d_change = df["AD_Line"].iloc[-1] - df["AD_Line"].iloc[-20]
+    if len(df_slice) >= 20:
+        ad_20d_change = df_slice["AD_Line"].iloc[-1] - df_slice["AD_Line"].iloc[-20]
 
         if price_20d_change <= 0 and ad_20d_change > 0:
             ad_signal = "Bullish Divergence (Accumulation)"
@@ -431,12 +448,12 @@ def generate_signals(ticker, name, df):
     change_1d = round(((close / prev["Close"]) - 1) * 100, 2) if prev["Close"] else 0
 
     # 5-day and 20-day returns
-    if len(df) >= 5:
-        change_5d = round(((close / df.iloc[-5]["Close"]) - 1) * 100, 2)
+    if len(df_slice) >= 5:
+        change_5d = round(((close / df_slice.iloc[-5]["Close"]) - 1) * 100, 2)
     else:
         change_5d = "N/A"
-    if len(df) >= 20:
-        change_20d = round(((close / df.iloc[-20]["Close"]) - 1) * 100, 2)
+    if len(df_slice) >= 20:
+        change_20d = round(((close / df_slice.iloc[-20]["Close"]) - 1) * 100, 2)
     else:
         change_20d = "N/A"
 
@@ -478,6 +495,44 @@ def generate_signals(ticker, name, df):
         # Currency
         latest.get("Currency", "N/A"),
     ]
+
+
+def get_weekly_endpoints(df, num_weeks=13):
+    """Find the last trading day of each week for the past num_weeks weeks.
+
+    Returns a list of integer positions into the DataFrame, ordered oldest first.
+    """
+    if df.empty:
+        return []
+
+    # Group by ISO year-week, take the last trading day of each week
+    df_with_pos = df.copy()
+    df_with_pos["_pos"] = range(len(df_with_pos))
+    df_with_pos["_year_week"] = df_with_pos.index.isocalendar().year.astype(str) + "-" + \
+        df_with_pos.index.isocalendar().week.astype(str).str.zfill(2)
+
+    # Get last day per week
+    weekly = df_with_pos.groupby("_year_week")["_pos"].last()
+    weekly = weekly.sort_values()
+
+    # Take the most recent num_weeks weeks
+    weekly_positions = weekly.tail(num_weeks).tolist()
+
+    return weekly_positions
+
+
+def generate_weekly_signals(ticker, name, df, num_weeks=13):
+    """Generate signal rows for the last trading day of each of the past num_weeks weeks.
+
+    Returns a list of signal rows (one per week), ordered oldest first.
+    """
+    positions = get_weekly_endpoints(df, num_weeks)
+    rows = []
+    for pos in positions:
+        row = generate_signals(ticker, name, df, pos=pos)
+        if row:
+            rows.append(row)
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -587,18 +642,17 @@ def main():
                         indicator_row.append(val if not (isinstance(val, float) and pd.isna(val)) else "")
                 all_indicator_rows.append(indicator_row)
 
-            # Generate signal summary
-            signal_row = generate_signals(ticker, name, df)
-            if signal_row:
-                all_signal_rows.append(signal_row)
+            # Generate weekly signal rows (one per week, 13 weeks back)
+            weekly_rows = generate_weekly_signals(ticker, name, df, num_weeks=13)
+            all_signal_rows.extend(weekly_rows)
 
-            print(f"  ✓ {ticker}: {len(recent)} indicator days")
+            print(f"  ✓ {ticker}: {len(recent)} indicator days, {len(weekly_rows)} weekly signals")
 
         except Exception as e:
             print(f"  ✗ {ticker}: Error - {e}")
 
     print(f"\nTotal indicator rows: {len(all_indicator_rows)}")
-    print(f"Total signal rows: {len(all_signal_rows)}")
+    print(f"Total signal rows: {len(all_signal_rows)} ({len(all_signal_rows) // max(len(ticker_dfs), 1)} weeks × {len(ticker_dfs)} tickers)")
 
     # Write Indicators tab
     print("\nWriting Indicators tab...")
@@ -606,6 +660,9 @@ def main():
     print(f"  ✓ Written {len(all_indicator_rows)} rows")
 
     time.sleep(5)  # Rate limit pause
+
+    # Sort signal rows by date (col 0) then ticker (col 1) for readability
+    all_signal_rows.sort(key=lambda r: (r[0], r[1]))
 
     # Write Signals tab
     print("Writing Signals tab...")
