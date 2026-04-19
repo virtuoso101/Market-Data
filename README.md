@@ -9,7 +9,7 @@ Each night at **10pm UTC**, a scheduled GitHub Actions workflow runs two scripts
 1. **`fetch_eod_data.py`** — pulls the latest closing prices for every ticker in the Google Sheet's Assets tab via `yfinance`, deduplicates, and appends new rows to the Daily tab.
 2. **`calculate_indicators.py`** — reads the Daily tab, computes technical indicators across all tickers, and writes the results to two additional tabs:
    - **Indicators** — 90 days of daily values (Candle patterns, Volume analysis, Guppy EMAs, Stochastic Momentum Index, True Range/ATR, RSI)
-   - **Signals** — one row per ticker with the latest values and plain-language signals (e.g. "RSI: Overbought", "Guppy: Bullish, Expanding")
+   - **Signals** — weekly historical signals (one row per ticker per week, 13 weeks), with plain-language signals (e.g. "RSI: Overbought", "Guppy: Bullish, Expanding")
 
 ## Google Sheet structure
 
@@ -18,7 +18,7 @@ Each night at **10pm UTC**, a scheduled GitHub Actions workflow runs two scripts
 | **Assets** | Editable watchlist (Ticker, Name) | By you |
 | **Daily** | Raw OHLCV data, appended daily | Every run |
 | **Indicators** | 90 days of daily indicator values per ticker | Every run (full rewrite) |
-| **Signals** | Latest snapshot with derived signals per ticker | Every run (full rewrite) |
+| **Signals** | Weekly signals per ticker (13 weeks of history) | Every run (full rewrite) |
 
 ## Managing the watchlist
 
