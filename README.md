@@ -4,13 +4,15 @@ Automated daily pipeline that fetches end-of-day stock, ETF, and index prices fr
 
 ## What it does
 
-Each night at **10pm UTC**, a scheduled GitHub Actions workflow runs three steps in sequence:
+Each night at **10pm UTC**, a scheduled GitHub Actions workflow runs these steps in sequence:
 
 1. **`fetch_eod_data.py`** (assets) — pulls the latest closing prices for every ticker in the **EOD Market Data** sheet's Assets tab via `yfinance`, deduplicates, and appends new rows to its Daily tab.
 2. **`calculate_indicators.py`** — reads the Daily tab, computes technical indicators across all asset tickers, and writes the results to two additional tabs:
    - **Indicators** — 90 days of daily values (Candle patterns, Volume analysis, Guppy EMAs, Stochastic Momentum Index, True Range/ATR, RSI, OBV, MFI)
    - **Signals** — weekly historical signals (one row per ticker per week, 13 weeks), with plain-language signals (e.g. "RSI: Overbought", "Guppy: Bullish, Expanding")
-3. **`fetch_eod_data.py`** (indices) — pulls the latest closing prices for every ticker in the **EOD Indices Data** sheet's Indices tab and appends new rows to its Daily tab. Same script, different configuration via environment variables.
+3. **`export_csv.py`** (assets) — exports all tabs (Assets, Daily, Indicators, Signals) as CSV files to a Google Drive folder for easy access by LLM agents.
+4. **`fetch_eod_data.py`** (indices) — pulls the latest closing prices for every ticker in the **EOD Indices Data** sheet's Indices tab and appends new rows to its Daily tab.
+5. **`export_csv.py`** (indices) — exports the Indices and Daily tabs as CSVs to the same Drive folder.
 
 ## Google Sheets
 
@@ -67,6 +69,7 @@ See [SETUP.md](SETUP.md) for step-by-step instructions covering Google Cloud ser
 |------|---------|
 | `fetch_eod_data.py` | Fetches EOD price data from Yahoo Finance and writes to a Daily tab (used for both sheets) |
 | `calculate_indicators.py` | Computes technical indicators and writes Indicators + Signals tabs (assets only) |
+| `export_csv.py` | Exports Google Sheet tabs as CSV files to a Google Drive folder |
 | `requirements.txt` | Python dependencies |
 | `.github/workflows/fetch_eod_data.yml` | GitHub Actions workflow (daily schedule + manual trigger) |
 | `SETUP.md` | First-time setup guide |
