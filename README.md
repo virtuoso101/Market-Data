@@ -69,6 +69,9 @@ See [SETUP.md](SETUP.md) for step-by-step instructions covering Google Cloud ser
 | **Stochastic Momentum (SMI)** | SMI line and signal line, crossover detection |
 | **True Range / ATR** | 14-period ATR, ATR as percentage of price |
 | **RSI** | 14-period RSI |
+| **OBV** | On-Balance Volume with 20-day SMA, bullish/bearish divergence detection for accumulation/distribution |
+| **A/D Line** | Accumulation/Distribution Line with 20-day SMA, divergence detection against price |
+| **MFI** | 14-period Money Flow Index (volume-weighted RSI), MFI/RSI divergence for institutional activity |
 
 ## Using with LLMs
 
