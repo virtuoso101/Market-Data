@@ -35,7 +35,9 @@ BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "365"))
 DAILY_HEADERS = ["Date", "Ticker", "Name", "Open", "High", "Low", "Close", "Adj Close", "Volume", "Currency"]
 ASSETS_HEADERS = ["Ticker", "Name"]
 
-DEFAULT_ASSETS = [
+# Default seed tickers — used only when the watchlist tab is empty on first run.
+# Can be overridden via DEFAULT_ASSETS_JSON env var (JSON array of [ticker, name] pairs).
+_DEFAULT_ASSETS_FALLBACK = [
     ["BARC.L", "Barclays"],
     ["GOOG", "Alphabet"],
     ["7013.T", "IHI Corporation"],
@@ -44,6 +46,12 @@ DEFAULT_ASSETS = [
     ["SEMU.L", "Amundi Semiconductors ETF"],
     ["DFNG.L", "VanEck Defense ETF"],
 ]
+
+_custom_defaults = os.environ.get("DEFAULT_ASSETS_JSON")
+if _custom_defaults:
+    DEFAULT_ASSETS = json.loads(_custom_defaults)
+else:
+    DEFAULT_ASSETS = _DEFAULT_ASSETS_FALLBACK
 
 
 # ---------------------------------------------------------------------------
