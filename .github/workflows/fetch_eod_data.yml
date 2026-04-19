@@ -35,3 +35,9 @@ jobs:
           SPREADSHEET_NAME: ${{ secrets.SPREADSHEET_NAME }}
           LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || '1' }}
         run: python fetch_eod_data.py
+
+      - name: Calculate technical indicators
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SPREADSHEET_NAME: ${{ secrets.SPREADSHEET_NAME }}
+        run: python calculate_indicators.py
