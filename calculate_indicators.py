@@ -205,6 +205,44 @@ def calc_rsi(df, period=14):
     return df
 
 
+def calc_obv(df):
+    """On-Balance Volume — running total of volume, signed by price direction."""
+    sign = np.where(df["Close"] > df["Close"].shift(1), 1,
+           np.where(df["Close"] < df["Close"].shift(1), -1, 0))
+    obv = (df["Volume"] * sign).cumsum()
+    df["OBV"] = obv.round(0)
+    df["OBV_SMA20"] = obv.rolling(20).mean().round(0)
+    return df
+
+
+def calc_ad_line(df):
+    """Accumulation/Distribution Line — volume weighted by close position in range."""
+    high_low = df["High"] - df["Low"]
+    clv = ((df["Close"] - df["Low"]) - (df["High"] - df["Close"])) / high_low.replace(0, np.nan)
+    ad = (clv * df["Volume"]).cumsum()
+    df["AD_Line"] = ad.round(0)
+    df["AD_SMA20"] = ad.rolling(20).mean().round(0)
+    return df
+
+
+def calc_mfi(df, period=14):
+    """Money Flow Index — volume-weighted RSI."""
+    typical_price = (df["High"] + df["Low"] + df["Close"]) / 3
+    raw_money_flow = typical_price * df["Volume"]
+
+    positive_flow = raw_money_flow.where(typical_price > typical_price.shift(1), 0.0)
+    negative_flow = raw_money_flow.where(typical_price < typical_price.shift(1), 0.0)
+
+    positive_sum = positive_flow.rolling(period).sum()
+    negative_sum = negative_flow.rolling(period).sum()
+
+    money_ratio = positive_sum / negative_sum.replace(0, np.nan)
+    mfi = 100 - (100 / (1 + money_ratio))
+
+    df["MFI_14"] = round(mfi, 2)
+    return df
+
+
 def calculate_all_indicators(df):
     """Apply all indicator calculations to a single ticker's DataFrame."""
     df = calc_candle(df)
@@ -213,6 +251,9 @@ def calculate_all_indicators(df):
     df = calc_smi(df)
     df = calc_true_range(df)
     df = calc_rsi(df)
+    df = calc_obv(df)
+    df = calc_ad_line(df)
+    df = calc_mfi(df)
     return df
 
 
@@ -335,6 +376,56 @@ def generate_signals(ticker, name, df):
     else:
         candle_signal = "N/A"
 
+    # --- OBV Signal (divergence detection over 20 days) ---
+    if len(df) >= 20:
+        price_20d_change = df["Close"].iloc[-1] - df["Close"].iloc[-20]
+        obv_20d_change = df["OBV"].iloc[-1] - df["OBV"].iloc[-20]
+
+        if price_20d_change <= 0 and obv_20d_change > 0:
+            obv_signal = "Bullish Divergence (Accumulation)"
+        elif price_20d_change >= 0 and obv_20d_change < 0:
+            obv_signal = "Bearish Divergence (Distribution)"
+        elif obv_20d_change > 0:
+            obv_signal = "Confirming Up"
+        else:
+            obv_signal = "Confirming Down"
+    else:
+        obv_signal = "N/A"
+
+    # --- A/D Line Signal (divergence detection over 20 days) ---
+    if len(df) >= 20:
+        ad_20d_change = df["AD_Line"].iloc[-1] - df["AD_Line"].iloc[-20]
+
+        if price_20d_change <= 0 and ad_20d_change > 0:
+            ad_signal = "Bullish Divergence (Accumulation)"
+        elif price_20d_change >= 0 and ad_20d_change < 0:
+            ad_signal = "Bearish Divergence (Distribution)"
+        elif ad_20d_change > 0:
+            ad_signal = "Accumulation"
+        else:
+            ad_signal = "Distribution"
+    else:
+        ad_signal = "N/A"
+
+    # --- MFI Signal ---
+    mfi = latest.get("MFI_14", None)
+    if mfi is not None:
+        # MFI-RSI divergence: MFI accounts for volume, RSI doesn't
+        if mfi >= 80:
+            mfi_signal = "Overbought"
+        elif mfi <= 20:
+            mfi_signal = "Oversold"
+        elif rsi is not None and mfi > 60 and rsi < 50:
+            mfi_signal = "Volume Accumulation (MFI/RSI divergence)"
+        elif rsi is not None and mfi < 40 and rsi > 50:
+            mfi_signal = "Volume Distribution (MFI/RSI divergence)"
+        elif mfi >= 50:
+            mfi_signal = "Bullish"
+        else:
+            mfi_signal = "Bearish"
+    else:
+        mfi_signal = "N/A"
+
     # --- Price context ---
     close = latest.get("Close", 0)
     change_1d = round(((close / prev["Close"]) - 1) * 100, 2) if prev["Close"] else 0
@@ -377,6 +468,14 @@ def generate_signals(ticker, name, df):
         atr_signal,
         # Candle
         candle_signal,
+        # OBV
+        obv_signal,
+        # A/D Line
+        ad_signal,
+        # MFI
+        round(mfi, 2) if mfi is not None else "N/A",
+        mfi_signal,
+        # Currency
         latest.get("Currency", "N/A"),
     ]
 
@@ -404,6 +503,12 @@ INDICATOR_HEADERS = [
     "True_Range", "ATR_14", "ATR_Pct",
     # RSI
     "RSI_14",
+    # OBV
+    "OBV", "OBV_SMA20",
+    # A/D Line
+    "AD_Line", "AD_SMA20",
+    # MFI
+    "MFI_14",
 ]
 
 SIGNALS_HEADERS = [
@@ -414,7 +519,10 @@ SIGNALS_HEADERS = [
     "Guppy_Signal", "Guppy_Short_Spread",
     "Volume", "Vol_Ratio", "Vol_Signal",
     "ATR_14", "ATR_Pct", "ATR_Signal",
-    "Candle_Signal", "Currency",
+    "Candle_Signal",
+    "OBV_Signal", "AD_Signal",
+    "MFI_14", "MFI_Signal",
+    "Currency",
 ]
 
 
