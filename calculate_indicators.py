@@ -12,6 +12,8 @@ Indicators calculated:
   - Stochastic Momentum Index (SMI)
   - True Range / ATR (14-period)
   - RSI (14-period)
+  - On-Balance Volume (OBV)
+  - Money Flow Index (MFI, 14-period)
 
 Designed to run as a GitHub Actions step after fetch_eod_data.py.
 """
@@ -215,15 +217,6 @@ def calc_obv(df):
     return df
 
 
-def calc_ad_line(df):
-    """Accumulation/Distribution Line — volume weighted by close position in range."""
-    high_low = df["High"] - df["Low"]
-    clv = ((df["Close"] - df["Low"]) - (df["High"] - df["Close"])) / high_low.replace(0, np.nan)
-    ad = (clv * df["Volume"]).cumsum()
-    df["AD_Line"] = ad.round(0)
-    df["AD_SMA20"] = ad.rolling(20).mean().round(0)
-    return df
-
 
 def calc_mfi(df, period=14):
     """Money Flow Index — volume-weighted RSI."""
@@ -252,7 +245,6 @@ def calculate_all_indicators(df):
     df = calc_true_range(df)
     df = calc_rsi(df)
     df = calc_obv(df)
-    df = calc_ad_line(df)
     df = calc_mfi(df)
     return df
 
@@ -409,21 +401,6 @@ def generate_signals(ticker, name, df, pos=-1):
     else:
         obv_signal = "N/A"
 
-    # --- A/D Line Signal (divergence detection over 20 days) ---
-    if len(df_slice) >= 20:
-        ad_20d_change = df_slice["AD_Line"].iloc[-1] - df_slice["AD_Line"].iloc[-20]
-
-        if price_20d_change <= 0 and ad_20d_change > 0:
-            ad_signal = "Bullish Divergence (Accumulation)"
-        elif price_20d_change >= 0 and ad_20d_change < 0:
-            ad_signal = "Bearish Divergence (Distribution)"
-        elif ad_20d_change > 0:
-            ad_signal = "Accumulation"
-        else:
-            ad_signal = "Distribution"
-    else:
-        ad_signal = "N/A"
-
     # --- MFI Signal ---
     mfi = latest.get("MFI_14", None)
     if mfi is not None:
@@ -487,8 +464,6 @@ def generate_signals(ticker, name, df, pos=-1):
         candle_signal,
         # OBV
         obv_signal,
-        # A/D Line
-        ad_signal,
         # MFI
         round(mfi, 2) if mfi is not None else "N/A",
         mfi_signal,
@@ -560,8 +535,6 @@ INDICATOR_HEADERS = [
     "RSI_14",
     # OBV
     "OBV", "OBV_SMA20",
-    # A/D Line
-    "AD_Line", "AD_SMA20",
     # MFI
     "MFI_14",
 ]
@@ -575,7 +548,7 @@ SIGNALS_HEADERS = [
     "Volume", "Vol_Ratio", "Vol_Signal",
     "ATR_14", "ATR_Pct", "ATR_Signal",
     "Candle_Signal",
-    "OBV_Signal", "AD_Signal",
+    "OBV_Signal",
     "MFI_14", "MFI_Signal",
     "Currency",
 ]
