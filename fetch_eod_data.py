@@ -1,11 +1,14 @@
 """
 Daily EOD Stock Data Fetcher
+
 Pulls end-of-day data from Yahoo Finance via yfinance and appends it to a Google Sheet.
 Designed to run as a GitHub Actions cron job.
 
 Asset list is managed in an 'Assets' tab (Ticker, Name).
+
 - New tickers are automatically backfilled with 365 days of history.
 - Removed tickers have their data purged from the Daily tab.
+- Daily tab is trimmed to a maximum of 13 weeks of history after each run.
 """
 
 import os
@@ -32,6 +35,9 @@ LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "1"))
 # How many days to backfill when a new ticker is added
 BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "365"))
 
+# Maximum number of weeks of data to retain in the Daily tab
+DAILY_MAX_WEEKS = 13
+
 DAILY_HEADERS = ["Date", "Ticker", "Name", "Open", "High", "Low", "Close", "Adj Close", "Volume", "Currency"]
 ASSETS_HEADERS = ["Ticker", "Name"]
 
@@ -53,7 +59,6 @@ if _custom_defaults:
 else:
     DEFAULT_ASSETS = _DEFAULT_ASSETS_FALLBACK
 
-
 # ---------------------------------------------------------------------------
 # Google Sheets Authentication
 # ---------------------------------------------------------------------------
@@ -66,7 +71,6 @@ def get_gsheet_client():
             "GOOGLE_CREDENTIALS environment variable not set. "
             "It should contain the JSON key for your Google service account."
         )
-
     creds_dict = json.loads(creds_json)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -82,15 +86,12 @@ def get_or_create_worksheet(spreadsheet, worksheet_name, headers):
         worksheet = spreadsheet.worksheet(worksheet_name)
     except gspread.exceptions.WorksheetNotFound:
         worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=len(headers))
-
     existing = worksheet.row_values(1)
     if not existing or existing[0] != headers[0]:
         end_col = chr(ord("A") + len(headers) - 1)
         worksheet.update(f"A1:{end_col}1", [headers])
         worksheet.format(f"A1:{end_col}1", {"textFormat": {"bold": True}})
-
     return worksheet
-
 
 # ---------------------------------------------------------------------------
 # Asset List Management
@@ -142,7 +143,6 @@ def get_existing_keys(daily_ws):
             keys.add((row[0], row[1]))
     return keys
 
-
 # ---------------------------------------------------------------------------
 # Sync: Remove Data for Deleted Tickers
 # ---------------------------------------------------------------------------
@@ -178,6 +178,32 @@ def remove_tickers(daily_ws, tickers_to_remove):
     removed_str = ", ".join(sorted(tickers_to_remove))
     print(f"  🗑 Removed {removed_count} rows for deleted tickers: {removed_str}")
 
+# ---------------------------------------------------------------------------
+# Trim: Enforce 13-Week Retention on Daily Tab
+# ---------------------------------------------------------------------------
+
+def trim_daily_tab(daily_ws, weeks=DAILY_MAX_WEEKS):
+    """Remove rows older than `weeks` weeks from the Daily tab."""
+    cutoff = (datetime.now() - timedelta(weeks=weeks)).strftime("%Y-%m-%d")
+    all_values = daily_ws.get_all_values()
+
+    if len(all_values) <= 1:
+        return
+
+    header = all_values[0]
+    kept_rows = [row for row in all_values[1:] if len(row) >= 1 and row[0] >= cutoff]
+    removed_count = len(all_values) - 1 - len(kept_rows)
+
+    if removed_count == 0:
+        print("  No rows to trim from Daily tab.")
+        return
+
+    daily_ws.clear()
+    daily_ws.update("A1", [header] + kept_rows, value_input_option="USER_ENTERED")
+    end_col = chr(ord("A") + len(header) - 1)
+    daily_ws.format(f"A1:{end_col}1", {"textFormat": {"bold": True}})
+
+    print(f"  🗑 Trimmed {removed_count} rows older than {weeks} weeks from Daily tab.")
 
 # ---------------------------------------------------------------------------
 # Data Fetching
@@ -189,6 +215,7 @@ def fetch_eod_data(assets, lookback_days=1):
     Args:
         assets: Dict of {ticker: name}.
         lookback_days: Number of days of history to fetch.
+
     Returns:
         List of row lists ready to append to the Daily sheet.
     """
@@ -196,12 +223,11 @@ def fetch_eod_data(assets, lookback_days=1):
     start_date = end_date - timedelta(days=lookback_days + 1)  # +1 buffer for weekends
 
     rows = []
-
     for ticker_symbol, asset_name in assets.items():
         try:
             ticker = yf.Ticker(ticker_symbol)
             hist = ticker.history(start=start_date.strftime("%Y-%m-%d"),
-                                 end=end_date.strftime("%Y-%m-%d"))
+                                  end=end_date.strftime("%Y-%m-%d"))
 
             if hist.empty:
                 print(f"  ⚠ No data returned for {ticker_symbol}")
@@ -232,7 +258,6 @@ def fetch_eod_data(assets, lookback_days=1):
 
     return rows
 
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -249,7 +274,6 @@ def main():
     # Load assets from the Assets tab
     print("Loading asset list...")
     assets = load_assets(spreadsheet)
-
     if not assets:
         print("No assets found in the Assets tab. Add rows with Ticker and Name columns.")
         return
@@ -262,7 +286,6 @@ def main():
     # --- Sync step: detect additions and removals ---
     existing_tickers = get_existing_tickers(daily_ws)
     asset_tickers = set(assets.keys())
-
     new_tickers = asset_tickers - existing_tickers
     removed_tickers = existing_tickers - asset_tickers
 
@@ -293,6 +316,8 @@ def main():
 
     if not all_new_rows:
         print("\nNo new data fetched. Markets may be closed today.")
+        print("\nTrimming Daily tab to 13 weeks...")
+        trim_daily_tab(daily_ws)
         return
 
     print(f"\nTotal rows fetched: {len(all_new_rows)}")
@@ -303,6 +328,8 @@ def main():
 
     if not unique_rows:
         print("All data already exists in the sheet. Nothing to append.")
+        print("\nTrimming Daily tab to 13 weeks...")
+        trim_daily_tab(daily_ws)
         return
 
     print(f"New rows to append: {len(unique_rows)}")
@@ -310,6 +337,7 @@ def main():
     # Append in batches (Sheets API allows 60 write requests/min)
     BATCH_SIZE = 1000
     total_batches = (len(unique_rows) + BATCH_SIZE - 1) // BATCH_SIZE
+
     for i in range(0, len(unique_rows), BATCH_SIZE):
         batch = unique_rows[i : i + BATCH_SIZE]
         batch_num = i // BATCH_SIZE + 1
@@ -319,6 +347,9 @@ def main():
             time.sleep(5)  # Pause between batches to stay within rate limits
 
     print(f"\n✓ Successfully appended {len(unique_rows)} rows to '{SPREADSHEET_NAME}'")
+
+    print("\nTrimming Daily tab to 13 weeks...")
+    trim_daily_tab(daily_ws)
 
 
 if __name__ == "__main__":
