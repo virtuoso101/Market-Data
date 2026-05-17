@@ -62,6 +62,17 @@ def get_gsheet_client():
     return gspread.authorize(credentials)
 
 
+def sanitise_rows(rows):
+    """Replace any NaN/Inf float values with empty string for JSON compliance."""
+    clean = []
+    for row in rows:
+        clean.append([
+            "" if isinstance(v, float) and (v != v or v == float("inf") or v == float("-inf")) else v
+            for v in row
+        ])
+    return clean
+
+
 def write_worksheet(spreadsheet, name, headers, rows):
     """Clear and rewrite a worksheet with headers + rows in one batch."""
     try:
@@ -69,7 +80,7 @@ def write_worksheet(spreadsheet, name, headers, rows):
     except gspread.exceptions.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=name, rows=max(len(rows) + 1, 100), cols=len(headers))
     ws.clear()
-    all_data = [headers] + rows
+    all_data = [headers] + sanitise_rows(rows)
     ws.update("A1", all_data, value_input_option="USER_ENTERED")
     ws.format(f"A1:{chr(ord('A') + len(headers) - 1)}1", {"textFormat": {"bold": True}})
     return ws
