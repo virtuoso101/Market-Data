@@ -1,30 +1,30 @@
 """
+
 Technical Indicator Calculator
 
 Reads EOD data from the 'Daily' tab of the Google Sheet, computes technical
 indicators, and writes results to two tabs:
-  - 'Indicators': 90 days of daily indicator values per ticker
-  - 'Signals': Weekly historical signals (one row per ticker per week, 13 weeks)
+- 'Indicators': 90 days of daily indicator values per ticker
+- 'Signals': Weekly historical signals (one row per ticker per week, 13 weeks)
 
 Indicators calculated:
-  - Candle patterns (body size, upper/lower wick, bullish/bearish)
-  - Volume (current, 20-day avg, volume ratio)
-  - Guppy Multiple Moving Averages (6 short EMAs + 6 long EMAs)
-  - Stochastic Momentum Index (SMI)
-  - True Range / ATR (14-period)
-  - RSI (14-period)
-  - On-Balance Volume (OBV)
-  - Money Flow Index (MFI, 14-period)
+- Candle patterns (body size, upper/lower wick, bullish/bearish)
+- Volume (current, 20-day avg, volume ratio)
+- Guppy Multiple Moving Averages (6 short EMAs + 6 long EMAs)
+- Stochastic Momentum Index (SMI)
+- True Range / ATR (14-period)
+- RSI (14-period)
+- On-Balance Volume (OBV)
+- Money Flow Index (MFI, 14-period)
 
 Designed to run as a GitHub Actions step after fetch_eod_data.py.
+
 """
 
 import os
 import json
-import math
 import time
 from datetime import datetime, timedelta
-
 import pandas as pd
 import numpy as np
 import gspread
@@ -62,29 +62,15 @@ def get_gsheet_client():
     return gspread.authorize(credentials)
 
 
-def _sanitize(val):
-    """Replace NaN/Inf float values with empty string for JSON safety."""
-    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
-        return ""
-    if isinstance(val, np.floating) and (np.isnan(val) or np.isinf(val)):
-        return ""
-    return val
-
-
 def write_worksheet(spreadsheet, name, headers, rows):
     """Clear and rewrite a worksheet with headers + rows in one batch."""
     try:
         ws = spreadsheet.worksheet(name)
     except gspread.exceptions.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=name, rows=max(len(rows) + 1, 100), cols=len(headers))
-
     ws.clear()
-
-    # Sanitize all values to remove NaN/Inf before sending to the Sheets API
-    safe_rows = [[_sanitize(cell) for cell in row] for row in rows]
-    all_data = [headers] + safe_rows
-
-    ws.update(all_data, "A1", value_input_option="USER_ENTERED")
+    all_data = [headers] + rows
+    ws.update("A1", all_data, value_input_option="USER_ENTERED")
     ws.format(f"A1:{chr(ord('A') + len(headers) - 1)}1", {"textFormat": {"bold": True}})
     return ws
 
@@ -96,13 +82,11 @@ def load_daily_data(spreadsheet):
     """Read the Daily tab and return a dict of {ticker: DataFrame}."""
     ws = spreadsheet.worksheet(DAILY_WORKSHEET)
     all_values = ws.get_all_values()
-
     if len(all_values) <= 1:
         return {}
 
     headers = all_values[0]
     rows = all_values[1:]
-
     df = pd.DataFrame(rows, columns=headers)
 
     # Convert numeric columns
@@ -173,7 +157,6 @@ def calc_smi(df, k_length=14, d_length=3, smooth=3):
     highest_high = df["High"].rolling(k_length).max()
     lowest_low = df["Low"].rolling(k_length).min()
     midpoint = (highest_high + lowest_low) / 2
-
     diff = df["Close"] - midpoint
     range_hl = highest_high - lowest_low
 
@@ -193,8 +176,8 @@ def calc_true_range(df, period=14):
     high_low = df["High"] - df["Low"]
     high_close = (df["High"] - df["Close"].shift(1)).abs()
     low_close = (df["Low"] - df["Close"].shift(1)).abs()
-
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+
     df["True_Range"] = round(tr, 4)
     df["ATR_14"] = round(tr.rolling(period).mean(), 4)
     df["ATR_Pct"] = round((df["ATR_14"] / df["Close"]) * 100, 2)
@@ -206,10 +189,8 @@ def calc_rsi(df, period=14):
     delta = df["Close"].diff()
     gain = delta.where(delta > 0, 0.0)
     loss = (-delta).where(delta < 0, 0.0)
-
     avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
     df["RSI_14"] = round(rsi, 2)
@@ -230,13 +211,10 @@ def calc_mfi(df, period=14):
     """Money Flow Index — volume-weighted RSI."""
     typical_price = (df["High"] + df["Low"] + df["Close"]) / 3
     raw_money_flow = typical_price * df["Volume"]
-
     positive_flow = raw_money_flow.where(typical_price > typical_price.shift(1), 0.0)
     negative_flow = raw_money_flow.where(typical_price < typical_price.shift(1), 0.0)
-
     positive_sum = positive_flow.rolling(period).sum()
     negative_sum = negative_flow.rolling(period).sum()
-
     money_ratio = positive_sum / negative_sum.replace(0, np.nan)
     mfi = 100 - (100 / (1 + money_ratio))
     df["MFI_14"] = round(mfi, 2)
@@ -259,17 +237,16 @@ def calculate_all_indicators(df):
 # Signal Generation
 # ---------------------------------------------------------------------------
 
-def _safe_float(val):
-    """Return val if it's a valid finite number, otherwise None."""
-    try:
-        f = float(val)
-        return f if math.isfinite(f) else None
-    except (TypeError, ValueError):
-        return None
-
-
 def generate_signals(ticker, name, df, pos=-1):
-    """Generate a summary signal row from indicator values at a given position."""
+    """Generate a summary signal row from indicator values at a given position.
+
+    Args:
+        ticker: Ticker symbol
+        name:   Display name
+        df:     Full DataFrame with all indicators calculated
+        pos:    Integer position in the DataFrame (default -1 = latest row).
+                Negative indices work like normal Python (e.g. -1 = last row).
+    """
     if pos < 0:
         pos = len(df) + pos
 
@@ -277,6 +254,7 @@ def generate_signals(ticker, name, df, pos=-1):
         return None
 
     df_slice = df.iloc[:pos + 1]
+
     if len(df_slice) < 2:
         return None
 
@@ -284,7 +262,7 @@ def generate_signals(ticker, name, df, pos=-1):
     prev = df_slice.iloc[-2]
 
     # --- RSI Signal ---
-    rsi = _safe_float(latest.get("RSI_14"))
+    rsi = latest.get("RSI_14", None)
     if rsi is not None:
         if rsi >= 70:
             rsi_signal = "Overbought"
@@ -300,10 +278,10 @@ def generate_signals(ticker, name, df, pos=-1):
         rsi_signal = "N/A"
 
     # --- SMI Signal ---
-    smi = _safe_float(latest.get("SMI"))
-    smi_sig = _safe_float(latest.get("SMI_Signal"))
-    prev_smi = _safe_float(prev.get("SMI"))
-    prev_smi_sig = _safe_float(prev.get("SMI_Signal"))
+    smi = latest.get("SMI", None)
+    smi_sig = latest.get("SMI_Signal", None)
+    prev_smi = prev.get("SMI", None)
+    prev_smi_sig = prev.get("SMI_Signal", None)
 
     if all(v is not None for v in [smi, smi_sig, prev_smi, prev_smi_sig]):
         if prev_smi <= prev_smi_sig and smi > smi_sig:
@@ -321,11 +299,22 @@ def generate_signals(ticker, name, df, pos=-1):
     else:
         smi_signal = "N/A"
 
+    # --- SMI Trend (direction vs prior week snapshot) ---
+    if len(df_slice) >= 6 and smi is not None:
+        smi_6d_ago = df_slice.iloc[-6].get("SMI", None)
+        if smi_6d_ago is not None:
+            smi_trend = "Rising" if smi > smi_6d_ago else ("Falling" if smi < smi_6d_ago else "Flat")
+        else:
+            smi_trend = "N/A"
+    else:
+        smi_trend = "N/A"
+
     # --- Guppy Signal ---
-    short_avg = _safe_float(latest.get("Guppy_Short_Avg"))
-    long_avg = _safe_float(latest.get("Guppy_Long_Avg"))
-    short_spread = _safe_float(latest.get("Guppy_Short_Spread"))
-    prev_short_spread = _safe_float(prev.get("Guppy_Short_Spread"))
+    short_avg = latest.get("Guppy_Short_Avg", None)
+    long_avg = latest.get("Guppy_Long_Avg", None)
+    short_spread = latest.get("Guppy_Short_Spread", None)
+    long_spread = latest.get("Guppy_Long_Spread", None)
+    prev_short_spread = prev.get("Guppy_Short_Spread", None)
 
     if all(v is not None for v in [short_avg, long_avg, short_spread, prev_short_spread]):
         trend = "Bullish" if short_avg > long_avg else "Bearish"
@@ -335,7 +324,7 @@ def generate_signals(ticker, name, df, pos=-1):
         guppy_signal = "N/A"
 
     # --- Volume Signal ---
-    vol_ratio = _safe_float(latest.get("Vol_Ratio"))
+    vol_ratio = latest.get("Vol_Ratio", None)
     if vol_ratio is not None:
         if vol_ratio >= 2.0:
             vol_signal = "Very High"
@@ -349,7 +338,7 @@ def generate_signals(ticker, name, df, pos=-1):
         vol_signal = "N/A"
 
     # --- ATR / Volatility Signal ---
-    atr_pct = _safe_float(latest.get("ATR_Pct"))
+    atr_pct = latest.get("ATR_Pct", None)
     if atr_pct is not None:
         if atr_pct >= 5:
             atr_signal = "Very High"
@@ -364,9 +353,9 @@ def generate_signals(ticker, name, df, pos=-1):
 
     # --- Candle Signal ---
     candle_type = latest.get("Candle_Type", "N/A")
-    body_pct = _safe_float(latest.get("Candle_Body_Pct"))
-    upper_wick = _safe_float(latest.get("Upper_Wick_Pct"))
-    lower_wick = _safe_float(latest.get("Lower_Wick_Pct"))
+    body_pct = latest.get("Candle_Body_Pct", None)
+    upper_wick = latest.get("Upper_Wick_Pct", None)
+    lower_wick = latest.get("Lower_Wick_Pct", None)
 
     if all(v is not None for v in [body_pct, upper_wick, lower_wick]):
         if body_pct < 10:
@@ -382,10 +371,14 @@ def generate_signals(ticker, name, df, pos=-1):
     else:
         candle_signal = "N/A"
 
-    # --- OBV Signal ---
+    # --- OBV Signal (divergence detection over 20 days) ---
+    obv_val = latest.get("OBV", None)
+    obv_sma = latest.get("OBV_SMA20", None)
+
     if len(df_slice) >= 20:
         price_20d_change = df_slice["Close"].iloc[-1] - df_slice["Close"].iloc[-20]
         obv_20d_change = df_slice["OBV"].iloc[-1] - df_slice["OBV"].iloc[-20]
+
         if price_20d_change <= 0 and obv_20d_change > 0:
             obv_signal = "Bullish Divergence (Accumulation)"
         elif price_20d_change >= 0 and obv_20d_change < 0:
@@ -397,8 +390,14 @@ def generate_signals(ticker, name, df, pos=-1):
     else:
         obv_signal = "N/A"
 
+    # OBV vs its 20-day SMA as a percentage (magnitude of divergence)
+    if obv_val is not None and obv_sma is not None and obv_sma != 0:
+        obv_vs_sma_pct = round(((obv_val / obv_sma) - 1) * 100, 2)
+    else:
+        obv_vs_sma_pct = "N/A"
+
     # --- MFI Signal ---
-    mfi = _safe_float(latest.get("MFI_14"))
+    mfi = latest.get("MFI_14", None)
     if mfi is not None:
         if mfi >= 80:
             mfi_signal = "Overbought"
@@ -416,43 +415,63 @@ def generate_signals(ticker, name, df, pos=-1):
         mfi_signal = "N/A"
 
     # --- Price context ---
-    close = _safe_float(latest.get("Close")) or 0
-    prev_close = _safe_float(prev.get("Close"))
-    change_1d = round(((close / prev_close) - 1) * 100, 2) if prev_close else "N/A"
+    close = latest.get("Close", 0)
+    change_1d = round(((close / prev["Close"]) - 1) * 100, 2) if prev["Close"] else 0
 
-    change_5d = round(((close / _safe_float(df_slice.iloc[-5]["Close"])) - 1) * 100, 2) \
-        if len(df_slice) >= 5 and _safe_float(df_slice.iloc[-5]["Close"]) else "N/A"
+    change_5d = round(((close / df_slice.iloc[-5]["Close"]) - 1) * 100, 2) if len(df_slice) >= 5 else "N/A"
+    change_20d = round(((close / df_slice.iloc[-20]["Close"]) - 1) * 100, 2) if len(df_slice) >= 20 else "N/A"
+    change_90d = round(((close / df_slice.iloc[-90]["Close"]) - 1) * 100, 2) if len(df_slice) >= 90 else "N/A"
+    change_126d = round(((close / df_slice.iloc[-126]["Close"]) - 1) * 100, 2) if len(df_slice) >= 126 else "N/A"
 
-    change_20d = round(((close / _safe_float(df_slice.iloc[-20]["Close"])) - 1) * 100, 2) \
-        if len(df_slice) >= 20 and _safe_float(df_slice.iloc[-20]["Close"]) else "N/A"
-
-    volume_val = _safe_float(latest.get("Volume"))
+    # --- 52-week high / low (uses full df, not the slice, for accuracy) ---
+    high_52w = round(df["High"].tail(252).max(), 4)
+    low_52w = round(df["Low"].tail(252).min(), 4)
+    price_vs_52w_high_pct = round(((close / high_52w) - 1) * 100, 2) if high_52w else "N/A"
 
     return [
-        latest.name.strftime("%Y-%m-%d"),
+        latest.name.strftime("%Y-%m-%d"),   # Date
         ticker,
         name,
         round(close, 4),
         change_1d,
         change_5d,
         change_20d,
+        change_90d,
+        change_126d,
+        # 52-week
+        high_52w,
+        low_52w,
+        price_vs_52w_high_pct,
+        # RSI
         round(rsi, 2) if rsi is not None else "N/A",
         rsi_signal,
+        # SMI
         round(smi, 2) if smi is not None else "N/A",
         round(smi_sig, 2) if smi_sig is not None else "N/A",
         smi_signal,
+        smi_trend,
+        # Guppy
         guppy_signal,
         round(short_spread, 4) if short_spread is not None else "N/A",
-        int(volume_val) if volume_val is not None else "N/A",
+        round(long_avg, 4) if long_avg is not None else "N/A",
+        round(long_spread, 4) if long_spread is not None else "N/A",
+        # Volume
+        int(latest["Volume"]) if not pd.isna(latest["Volume"]) else "N/A",
         round(vol_ratio, 2) if vol_ratio is not None else "N/A",
         vol_signal,
-        round(_safe_float(latest.get("ATR_14")) or 0, 4),
+        # ATR
+        round(latest.get("ATR_14", 0), 4),
         atr_pct if atr_pct is not None else "N/A",
         atr_signal,
+        # Candle
         candle_signal,
+        # OBV
         obv_signal,
+        obv_vs_sma_pct,
+        # MFI
         round(mfi, 2) if mfi is not None else "N/A",
         mfi_signal,
+        # Currency
         latest.get("Currency", "N/A"),
     ]
 
@@ -464,14 +483,13 @@ def get_weekly_endpoints(df, num_weeks=13):
 
     df_with_pos = df.copy()
     df_with_pos["_pos"] = range(len(df_with_pos))
-    df_with_pos["_year_week"] = (
-        df_with_pos.index.isocalendar().year.astype(str) + "-" +
-        df_with_pos.index.isocalendar().week.astype(str).str.zfill(2)
-    )
+    df_with_pos["_year_week"] = df_with_pos.index.isocalendar().year.astype(str) + "-" + \
+                                df_with_pos.index.isocalendar().week.astype(str).str.zfill(2)
 
     weekly = df_with_pos.groupby("_year_week")["_pos"].last()
     weekly = weekly.sort_values()
-    return weekly.tail(num_weeks).tolist()
+    weekly_positions = weekly.tail(num_weeks).tolist()
+    return weekly_positions
 
 
 def generate_weekly_signals(ticker, name, df, num_weeks=13):
@@ -515,14 +533,15 @@ INDICATOR_HEADERS = [
 
 SIGNALS_HEADERS = [
     "Date", "Ticker", "Name", "Close",
-    "Change_1D_%", "Change_5D_%", "Change_20D_%",
+    "Change_1D_%", "Change_5D_%", "Change_20D_%", "Change_90D_%", "Change_126D_%",
+    "52W_High", "52W_Low", "Price_vs_52W_High_%",
     "RSI_14", "RSI_Signal",
-    "SMI", "SMI_Signal_Line", "SMI_Signal",
-    "Guppy_Signal", "Guppy_Short_Spread",
+    "SMI", "SMI_Signal_Line", "SMI_Signal", "SMI_Trend",
+    "Guppy_Signal", "Guppy_Short_Spread", "Guppy_Long_Avg", "Guppy_Long_Spread",
     "Volume", "Vol_Ratio", "Vol_Signal",
     "ATR_14", "ATR_Pct", "ATR_Signal",
     "Candle_Signal",
-    "OBV_Signal",
+    "OBV_Signal", "OBV_vs_SMA_%",
     "MFI_14", "MFI_Signal",
     "Currency",
 ]
@@ -546,7 +565,6 @@ def main():
         return
     print(f"  Loaded data for {len(ticker_dfs)} tickers\n")
 
-    # Load asset names
     try:
         assets_ws = spreadsheet.worksheet("Assets")
         assets_values = assets_ws.get_all_values()
@@ -567,25 +585,20 @@ def main():
             name = asset_names.get(ticker, ticker)
             df = calculate_all_indicators(df)
 
-            # Trim to last INDICATOR_DAYS for the Indicators tab
             recent = df[df.index >= pd.Timestamp(cutoff_date)]
-
             for date_idx, row in recent.iterrows():
                 indicator_row = [date_idx.strftime("%Y-%m-%d"), ticker, name]
                 for col in INDICATOR_HEADERS[3:]:
                     val = row.get(col, "")
-                    if isinstance(val, (float, np.floating)):
+                    if isinstance(val, float):
                         if pd.isna(val):
                             indicator_row.append("")
-                        elif "Guppy" in col or col in ["True_Range", "ATR_14", "Candle_Body"]:
-                            indicator_row.append(round(float(val), 4))
                         else:
-                            indicator_row.append(round(float(val), 2))
+                            indicator_row.append(round(val, 4) if "Guppy" in col or col in ["True_Range", "ATR_14", "Candle_Body"] else round(val, 2))
                     else:
-                        indicator_row.append(val)
+                        indicator_row.append(val if not (isinstance(val, float) and pd.isna(val)) else "")
                 all_indicator_rows.append(indicator_row)
 
-            # Generate weekly signal rows
             weekly_rows = generate_weekly_signals(ticker, name, df, num_weeks=13)
             all_signal_rows.extend(weekly_rows)
 
@@ -597,17 +610,14 @@ def main():
     print(f"\nTotal indicator rows: {len(all_indicator_rows)}")
     print(f"Total signal rows: {len(all_signal_rows)} ({len(all_signal_rows) // max(len(ticker_dfs), 1)} weeks × {len(ticker_dfs)} tickers)")
 
-    # Write Indicators tab
     print("\nWriting Indicators tab...")
     write_worksheet(spreadsheet, INDICATORS_WORKSHEET, INDICATOR_HEADERS, all_indicator_rows)
     print(f"  ✓ Written {len(all_indicator_rows)} rows")
 
     time.sleep(5)
 
-    # Sort signal rows by date then ticker
     all_signal_rows.sort(key=lambda r: (r[0], r[1]))
 
-    # Write Signals tab
     print("Writing Signals tab...")
     write_worksheet(spreadsheet, SIGNALS_WORKSHEET, SIGNALS_HEADERS, all_signal_rows)
     print(f"  ✓ Written {len(all_signal_rows)} rows")
